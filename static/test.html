@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Screener Relay Test — Angel One</title>
+<style>
+  :root { --ink:#111827; --muted:#4B5563; --line:#E2E5EA; --bg:#F5F6F8; --blue:#1E40AF; --ok:#166534; --bad:#9A3412; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; display:flex; flex-direction:column; gap:16px; }
+  h1 { font-size: 20px; margin: 4px 0 0; }
+  .note { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+  section { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px; }
+  h2 { font-size: 15px; margin:0 0 10px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:600; color:#374151; }
+  input { font-size:14px; padding:10px; border:1px solid #D1D5DB; border-radius:6px; min-height:44px; width:100%; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  button { font: inherit; font-size:14px; font-weight:600; padding:10px 14px; min-height:44px; border-radius:6px; border:1px solid #D1D5DB; background:#fff; color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid #EEF0F3; }
+  th { font-size:12px; color:var(--muted); }
+  td.v { font-family: ui-monospace, Consolas, monospace; }
+  #log { font-family: ui-monospace, Consolas, monospace; font-size:12px; background:#0F172A; color:#E5E7EB; border-radius:8px; padding:12px; height:280px; overflow:auto; white-space:pre-wrap; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Screener relay test — Angel One</h1>
+    <p class="note">Technical test only. Credentials stay in this page's memory, pass through the relay to Angel One, and are never stored. Nothing here places orders.</p>
+  </div>
+
+  <section aria-labelledby="h-login">
+    <h2 id="h-login">1. Log in</h2>
+    <div class="grid">
+      <label>Relay key (only if set on Railway)<input id="relayKey" type="password" autocomplete="off"></label>
+      <label>SmartAPI API key<input id="apiKey" type="password" autocomplete="off"></label>
+      <label>Client code<input id="clientCode" autocomplete="off"></label>
+      <label>PIN<input id="pin" type="password" inputmode="numeric" autocomplete="off"></label>
+      <label>TOTP (6 digits)<input id="totp" inputmode="numeric" autocomplete="one-time-code"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="btnLogin" type="button">Log in</button>
+      <button id="btnLogout" type="button" disabled>Log out</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-inst">
+    <h2 id="h-inst">2. Load NSE equity list</h2>
+    <div class="row" style="margin-top:0">
+      <button class="primary" id="btnInst" type="button">Load instrument list</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-back">
+    <h2 id="h-back">3. History backfill test</h2>
+    <div class="grid">
+      <label>Number of stocks<input id="nStocks" type="number" value="50" min="1"></label>
+      <label>Days of history<input id="nDays" type="number" value="730" min="30"></label>
+      <label>Gap between requests (ms)<input id="gapMs" type="number" value="350" min="100"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="btnBack" type="button" disabled>Start backfill</button>
+      <button id="btnStop" type="button" disabled>Stop</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-quote">
+    <h2 id="h-quote">4. Daily top-up test (batch quote)</h2>
+    <div class="grid">
+      <label>Number of stocks<input id="nQuote" type="number" value="500" min="50"></label>
+      <label>Gap between batches (ms)<input id="gapQ" type="number" value="1100" min="200"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="btnQuote" type="button" disabled>Run quote test</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-store">
+    <h2 id="h-store">5. Browser storage</h2>
+    <div class="row" style="margin-top:0">
+      <button class="primary" id="btnStore" type="button">Check storage</button>
+      <button id="btnClear" type="button">Delete test data</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-res">
+    <h2 id="h-res">Results</h2>
+    <table>
+      <thead><tr><th scope="col">Check</th><th scope="col">Result</th></tr></thead>
+      <tbody id="results"></tbody>
+    </table>
+    <div class="row">
+      <button id="btnCopy" type="button">Copy results + log</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-log">
+    <h2 id="h-log">Log</h2>
+    <div id="log" role="log" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var S = { jwt: "", apiKey: "", clientCode: "", inst: [], stop: false };
+  var DB_NAME = "bs_screener_test", STORE = "candles";
+  var $ = function (id) { return document.getElementById(id); };
+  var results = {};
+
+  function now() { return new Date().toLocaleTimeString("en-IN", { hour12: false }); }
+  function log(msg, cls) {
+    var line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = "[" + now() + "] " + msg;
+    $("log").appendChild(line);
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+  function setResult(key, value) {
+    results[key] = value;
+    var tb = $("results"); tb.innerHTML = "";
+    Object.keys(results).forEach(function (k) {
+      var tr = document.createElement("tr");
+      var a = document.createElement("td"); a.textContent = k;
+      var b = document.createElement("td"); b.className = "v"; b.textContent = results[k];
+      tr.appendChild(a); tr.appendChild(b); tb.appendChild(tr);
+    });
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function ymd(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+
+  async function api(path, body, method) {
+    var headers = { "Content-Type": "application/json" };
+    var rk = $("relayKey").value.trim();
+    if (rk) headers["X-Relay-Key"] = rk;
+    var t0 = performance.now();
+    var res = await fetch(path, {
+      method: method || "POST", headers: headers,
+      body: body ? JSON.stringify(body) : undefined, cache: "no-store"
+    });
+    var json = {};
+    try { json = await res.json(); } catch (e) { json = { status: false, message: "Bad JSON from relay" }; }
+    json._http = res.status;
+    json._ms = Math.round(performance.now() - t0);
+    return json;
+  }
+
+  function isRateLimited(r) {
+    var m = String(r.message || "") + " " + String(r.errorcode || "");
+    return r._http === 429 || r._http === 403 && /rate|access denied/i.test(m) || /exceed|rate limit|too many/i.test(m);
+  }
+
+  // ---------- IndexedDB ----------
+  function openDb() {
+    return new Promise(function (resolve, reject) {
+      var req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore(STORE, { keyPath: "s" }); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  }
+  async function putRows(rec) {
+    var db = await openDb();
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(rec);
+      tx.oncomplete = function () { db.close(); resolve(); };
+      tx.onerror = function () { db.close(); reject(tx.error); };
+    });
+  }
+  async function countRows() {
+    var db = await openDb();
+    return new Promise(function (resolve) {
+      var tx = db.transaction(STORE, "readonly");
+      var req = tx.objectStore(STORE).count();
+      req.onsuccess = function () { db.close(); resolve(req.result); };
+      req.onerror = function () { db.close(); resolve(-1); };
+    });
+  }
+
+  // ---------- 1. login ----------
+  $("btnLogin").addEventListener("click", async function () {
+    var apiKey = $("apiKey").value.trim(), cc = $("clientCode").value.trim();
+    var pin = $("pin").value.trim(), totp = $("totp").value.trim();
+    if (!apiKey || !cc || !pin || !totp) { log("Fill API key, client code, PIN and TOTP.", "bad"); return; }
+    this.disabled = true; log("Logging in…");
+    var r = await api("/api/angel/login", { api_key: apiKey, client_code: cc, pin: pin, totp: totp });
+    $("pin").value = ""; $("totp").value = "";
+    this.disabled = false;
+    if (r.status && r.jwt) {
+      S.jwt = r.jwt; S.apiKey = apiKey; S.clientCode = cc;
+      log("Login OK (" + r._ms + " ms round trip, Angel " + r.relay_ms + " ms).", "ok");
+      setResult("Login", "OK — " + r._ms + " ms");
+      $("btnLogout").disabled = false; refreshButtons();
+    } else {
+      log("Login failed: HTTP " + r._http + " — " + (r.message || "") + " " + (r.errorcode || ""), "bad");
+      setResult("Login", "FAILED — " + (r.message || r._http));
+    }
+  });
+
+  $("btnLogout").addEventListener("click", async function () {
+    if (!S.jwt) return;
+    var r = await api("/api/angel/logout", { api_key: S.apiKey, jwt: S.jwt, client_code: S.clientCode });
+    log("Logout: " + (r.status ? "OK" : "HTTP " + r._http + " " + (r.message || "")), r.status ? "ok" : "bad");
+    S.jwt = ""; S.apiKey = ""; this.disabled = true; refreshButtons();
+  });
+
+  function refreshButtons() {
+    var ready = !!S.jwt && S.inst.length > 0;
+    $("btnBack").disabled = !ready; $("btnQuote").disabled = !ready;
+  }
+
+  // ---------- 2. instruments ----------
+  $("btnInst").addEventListener("click", async function () {
+    this.disabled = true; log("Loading instrument list (first load can take ~20 s)…");
+    var r = await api("/api/instruments", null, "GET");
+    this.disabled = false;
+    if (r.status && r.data) {
+      S.inst = r.data;
+      log("Instrument list: " + r.count + " NSE -EQ symbols (" + r._ms + " ms).", "ok");
+      setResult("NSE -EQ symbols", r.count + " (" + r._ms + " ms)");
+      refreshButtons();
+    } else {
+      log("Instrument list failed: " + (r.message || r._http), "bad");
+      setResult("NSE -EQ symbols", "FAILED");
+    }
+  });
+
+  // ---------- 3. backfill ----------
+  $("btnStop").addEventListener("click", function () { S.stop = true; log("Stopping after current request…"); });
+
+  $("btnBack").addEventListener("click", async function () {
+    var n = Math.min(parseInt($("nStocks").value, 10) || 50, S.inst.length);
+    var days = parseInt($("nDays").value, 10) || 730;
+    var gap = Math.max(100, parseInt($("gapMs").value, 10) || 350);
+    var to = new Date(), from = new Date(Date.now() - days * 86400000);
+    var fromS = ymd(from) + " 09:15", toS = ymd(to) + " 15:30";
+    S.stop = false; this.disabled = true; $("btnStop").disabled = false;
+    log("Backfill: " + n + " stocks, " + days + " days, gap " + gap + " ms.");
+    var ok = 0, empty = 0, fail = 0, limited = 0, bars = 0, bytes = 0, lat = 0;
+    var t0 = performance.now();
+    for (var i = 0; i < n && !S.stop; i++) {
+      var it = S.inst[i], tries = 0, r;
+      while (true) {
+        r = await api("/api/angel/candles", { api_key: S.apiKey, jwt: S.jwt, token: it.t,
+          interval: "ONE_DAY", fromdate: fromS, todate: toS });
+        if (isRateLimited(r) && tries < 3) { limited++; tries++; log("Rate limited on " + it.s + ", waiting 2 s…", "bad"); await sleep(2000); continue; }
+        break;
+      }
+      lat += r._ms;
+      if (r.status && Array.isArray(r.data) && r.data.length) {
+        ok++; bars += r.data.length;
+        var rec = { s: it.s, t: it.t, rows: r.data, at: Date.now() };
+        bytes += JSON.stringify(rec).length;
+        try { await putRows(rec); } catch (e) { log("Storage write failed: " + e, "bad"); }
+      } else if (r.status) { empty++; }
+      else { fail++; if (fail <= 5) log("Fail " + it.s + ": HTTP " + r._http + " " + (r.message || "") + " " + (r.errorcode || ""), "bad"); }
+      if ((i + 1) % 10 === 0) log("…" + (i + 1) + "/" + n + " done");
+      await sleep(gap);
+    }
+    var done = ok + empty + fail;
+    var secs = (performance.now() - t0) / 1000;
+    var perMin = done ? (done / secs * 60) : 0;
+    var fullMin = perMin ? (S.inst.length / perMin) : 0;
+    log("Backfill finished: " + ok + " ok, " + empty + " empty, " + fail + " failed, " + limited + " rate-limit waits.", fail ? "bad" : "ok");
+    setResult("Backfill stocks", ok + " ok / " + empty + " empty / " + fail + " failed of " + done);
+    setResult("Backfill rate", perMin.toFixed(0) + " requests/min, avg " + (done ? Math.round(lat / done) : 0) + " ms each");
+    setResult("Rate-limit waits", String(limited));
+    setResult("Bars per stock (avg)", ok ? Math.round(bars / ok) + " daily bars" : "—");
+    setResult("Stored size (approx)", (bytes / 1048576).toFixed(2) + " MB for " + ok + " stocks");
+    setResult("Full universe estimate", fullMin ? fullMin.toFixed(1) + " min for " + S.inst.length + " stocks; ~" + (ok ? (bytes / ok * S.inst.length / 1048576).toFixed(0) : "?") + " MB" : "—");
+    this.disabled = false; $("btnStop").disabled = true;
+  });
+
+  // ---------- 4. batch quote ----------
+  $("btnQuote").addEventListener("click", async function () {
+    var n = Math.min(parseInt($("nQuote").value, 10) || 500, S.inst.length);
+    var gap = Math.max(200, parseInt($("gapQ").value, 10) || 1100);
+    this.disabled = true;
+    log("Quote test: " + n + " stocks in batches of 50, FULL mode, gap " + gap + " ms.");
+    var fetched = 0, unfetched = 0, fails = 0, limited = 0, calls = 0, sample = null, hasVol = false;
+    var t0 = performance.now();
+    for (var i = 0; i < n; i += 50) {
+      var batch = S.inst.slice(i, Math.min(i + 50, n)).map(function (x) { return x.t; });
+      var r, tries = 0;
+      while (true) {
+        r = await api("/api/angel/quote", { api_key: S.apiKey, jwt: S.jwt, mode: "FULL", tokens: batch });
+        if (isRateLimited(r) && tries < 3) { limited++; tries++; log("Quote rate limited, waiting 2 s…", "bad"); await sleep(2000); continue; }
+        break;
+      }
+      calls++;
+      if (r.status && r.data) {
+        var f = r.data.fetched || [], u = r.data.unfetched || [];
+        fetched += f.length; unfetched += u.length;
+        if (!sample && f.length) sample = f[0];
+        if (f.some(function (x) { return x.tradeVolume !== undefined; })) hasVol = true;
+      } else { fails++; if (fails <= 3) log("Quote fail: HTTP " + r._http + " " + (r.message || "") + " " + (r.errorcode || ""), "bad"); }
+      await sleep(gap);
+    }
+    var secs = ((performance.now() - t0) / 1000).toFixed(1);
+    log("Quote test finished: " + fetched + " fetched, " + unfetched + " unfetched, " + fails + " failed calls.", fails ? "bad" : "ok");
+    setResult("Quote calls", calls + " calls for " + n + " stocks in " + secs + " s");
+    setResult("Quote coverage", fetched + " fetched / " + unfetched + " unfetched / " + fails + " failed calls / " + limited + " waits");
+    setResult("Volume field present", hasVol ? "YES (tradeVolume)" : "NO");
+    if (sample) {
+      setResult("Sample fields", Object.keys(sample).join(", "));
+      log("Sample: " + (sample.tradingSymbol || "") + " O " + sample.open + " H " + sample.high + " L " + sample.low + " C/LTP " + (sample.ltp || sample.close) + " Vol " + sample.tradeVolume);
+    }
+    setResult("Full-universe top-up estimate", Math.ceil(S.inst.length / 50) + " calls, ~" + Math.ceil(S.inst.length / 50 * gap / 1000) + " s");
+    this.disabled = false;
+  });
+
+  // ---------- 5. storage ----------
+  $("btnStore").addEventListener("click", async function () {
+    try {
+      var c = await countRows();
+      var est = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
+      var persisted = navigator.storage && navigator.storage.persist ? await navigator.storage.persist() : false;
+      setResult("Stocks in browser storage", String(c));
+      if (est) setResult("Browser storage used / allowed", (est.usage / 1048576).toFixed(1) + " MB / " + (est.quota / 1048576).toFixed(0) + " MB");
+      setResult("Persistent storage granted", persisted ? "YES" : "NO (browser may clear it when low on space)");
+      log("Storage check done.", "ok");
+    } catch (e) { log("Storage check failed: " + e, "bad"); }
+  });
+
+  $("btnClear").addEventListener("click", function () {
+    var req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = function () { log("Test data deleted from this browser.", "ok"); };
+    req.onerror = function () { log("Could not delete test data.", "bad"); };
+  });
+
+  $("btnCopy").addEventListener("click", async function () {
+    var lines = ["RESULTS"].concat(Object.keys(results).map(function (k) { return k + ": " + results[k]; }));
+    lines.push("", "LOG", $("log").innerText);
+    lines.push("", "Browser: " + navigator.userAgent);
+    try { await navigator.clipboard.writeText(lines.join("\n")); log("Copied — paste it into the chat.", "ok"); }
+    catch (e) { log("Copy failed; select the log text manually.", "bad"); }
+  });
+
+  window.addEventListener("beforeunload", function () { S.jwt = ""; S.apiKey = ""; });
+})();
+</script>
+</body>
+</html>
